@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Symbolic 3D Projection Engine</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #111;
+      color: white;
+      overflow: hidden;
+    }
+    #engineCanvas {
+      display: block;
+      width: 100vw;
+      height: 70vh;
+    }
+    #controls {
+      width: 100%;
+      box-sizing: border-box;
+      text-align: center;
+      padding: 10px;
+      background: #222;
+      color: #eee;
+      font-family: monospace;
+    }
+    input {
+      background: #333;
+      color: #eee;
+      border: 1px solid #555;
+      padding: 4px 8px;
+      font-family: monospace;
+      margin: 4px;
+    }
+    button {
+      background: #444;
+      color: white;
+      border: 1px solid #666;
+      padding: 4px 12px;
+      font-family: monospace;
+      cursor: pointer;
+      margin: 4px;
+    }
+    button:hover {
+      background: #666;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="engineCanvas"></canvas>
+
+<div id="controls">
+  <div>
+    <label>Input A:</label>
+    <input type="text" id="inputA" placeholder="Enter input A..." />
+    <button onclick="submitInput('A')">Submit A</button>
+  </div>
+  <div>
+    <label>Input B:</label>
+    <input type="text" id="inputB" placeholder="Enter input B..." />
+    <button onclick="submitInput('B')">Submit B</button>
+  </div>
+  <div style="margin-top: 10px;">
+    <button onclick="play()">Play</button>
+    <button onclick="pause()">Pause</button>
+    <button onclick="step()">Step</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.156.1/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.156.1/examples/js/controls/OrbitControls.js"></script>
+<script>
+  // === SCENE SETUP ===
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+  camera.position.set(10, 10, 20);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('engineCanvas'), antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight * 0.7);
+
+  const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+  const light = new THREE.DirectionalLight(0xffffff, 1);
+  light.position.set(20, 50, 30);
+  scene.add(ambient, light);
+  
+
+  // === NODE SYSTEM ===
+  class Node {
+    constructor(id, x, z, layer, color) {
+      this.id = id;
+      this.x = x;
+      this.z = z; // separate layers by Z
+      this.y = 0;
+      this.charge = 0;
+      this.layer = layer;
+      this.color = color;
+	  this.reinforcement_counter = 0;
+	  
+	  this.dendrites = [null, null];
+	  this.axons = [];
+
+      const geometry = new THREE.SphereGeometry(0.05, 16, 16);
+      const material = new THREE.MeshStandardMaterial({ color: this.color });
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.updatePosition();
+      scene.add(this.mesh);
+    }
+
+    updatePosition() {
+      this.mesh.position.set(this.x, (this.y + this.charge), this.z);
+    }
+
+    applyCharge(delta) {
+      this.charge += delta;
+      this.charge = Math.max(-5, Math.min(this.charge, 5)); // clamp charge
+      //this.y = this.charge;
+      this.updatePosition();
+    }
+
+    map_RC() {
+      this.y = this.reinforcement_counter * 0.1;
+	  console.log("RC:");
+	  console.log(this.reinforcement_counter);
+      this.updatePosition();
+    }
+  }
+
+  class Edge {
+    constructor(nodeA, nodeB, color = 0xffffff) {
+      this.nodeA = nodeA;
+      this.nodeB = nodeB;
+      this.color = color;
+
+      const geometry = new THREE.CylinderGeometry(0.01, 0.01, 1, 8);
+      const material = new THREE.MeshStandardMaterial({ color: this.color });
+
+      this.mesh = new THREE.Mesh(geometry, material);
+      scene.add(this.mesh);
+
+      this.update();
+    }
+
+    update() {
+      const start = this.nodeA.mesh.position;
+      const end = this.nodeB.mesh.position;
+
+      const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+      const direction = new THREE.Vector3().subVectors(end, start);
+      const length = direction.length();
+
+      this.mesh.position.copy(midpoint);
+      this.mesh.scale.set(1, length, 1);
+
+      const axis = new THREE.Vector3(0, 1, 0);
+      const quaternion = new THREE.Quaternion().setFromUnitVectors(axis, direction.clone().normalize());
+      this.mesh.setRotationFromQuaternion(quaternion);
+    }
+  }
+
+	class NodeNetwork {
+	  constructor(layer, color) {
+		this.layer = layer;
+		this.color = color;
+		this.nodes = [];
+		this.edges = [];
+		this.tier_depths = []; //Number of nodes on each tier. Used to calculate node position.
+		this.states = new Map();
+	  }
+
+	  addNode(id, p_Tier) {
+		if (!this.tier_depths[p_Tier]){ this.tier_depths[p_Tier] = 0; }
+		this.tier_depths[p_Tier] += 1;
+		console.log(this.tier_depths[p_Tier]);
+		const node = new Node(id, (p_Tier * 1), (this.tier_depths[p_Tier] * 1), this.layer, this.color);
+		this.nodes.push(node);
+		return node;
+	  }
+
+	  connect(nodeA, nodeB, edgeColor = this.color) {
+		const edge = new Edge(nodeA, nodeB, edgeColor);
+		this.edges.push(edge);
+		return edge;
+	  }
+	  
+	  get_State_Node(atomic_primitive)
+	  {
+		if (this.states.has(atomic_primitive))
+		{
+			return this.states.get(atomic_primitive);
+		} else {
+			const node = this.addNode(atomic_primitive, 0);
+			this.states.set(atomic_primitive, node);
+			return node;
+		}
+	  }
+	  
+		get_Upper_Tier_Node(p_Tier, p_Node_L, p_Node_R)
+		{
+			if (!p_Node_L){ return; }
+			if (!p_Node_R){ return; }
+			
+			this.tmp_Node = null;
+			
+			console.log("p_Node_L.axons.length = ");
+			console.log(p_Node_L.axons.length);
+			
+			if (p_Node_L.axons.length > 0)
+			{
+				if (p_Node_R.axons.length > 0)
+				{
+					//Check each axon, if the right leg matches then that is the right node.
+					for (let cou_A=0;cou_A<p_Node_L.axons.length;cou_A++)
+					{
+						if (p_Node_L.axons[cou_A].dendrites[1] == p_Node_R){ this.tmp_Node = p_Node_L.axons[cou_A]; }
+						console.log("\n dend[1]");
+						console.log(p_Node_L.axons[cou_A].dendrites[1]);
+						
+					}
+				}
+			}
+			
+			if(!this.tmp_Node)
+			{
+			   //New_Node = Create_New_Node();
+			   //call Create_Connection(p_Left_Node, New_Node, 0)
+			   //call Create_Connection(p_Right_Node, New_Node, 1)
+				const node = this.addNode("null", p_Tier);
+				
+				node.dendrites[0] = p_Node_L;
+				node.dendrites[1] = p_Node_R;
+				
+				p_Node_L.axons[p_Node_L.axons.length] = node;
+				p_Node_R.axons[p_Node_R.axons.length] = node;
+				
+				this.connect(p_Node_L, node);
+				this.connect(p_Node_R, node);
+				
+				return node;
+			}
+			
+			return this.tmp_Node;
+		}
+		
+		Encode(p_Input) 
+		{
+			const scaffold = [];
+			const stateNodes = [];
+			
+			if (!scaffold[0]){ scaffold[0] = []; }
+			
+			for (let i = 0; i < p_Input.length; i++) 
+			{
+				const node = this.get_State_Node(p_Input[i]);
+				//const node = new Node(p_Input[i], x, z, layer, layer === 0 ? 0x00ffff : 0xff00ff);
+				
+				scaffold[0][i] = node;
+			}
+			
+			for (let cou_Tier = 0; cou_Tier < (p_Input.length - 1); cou_Tier++)
+			{
+				if (!scaffold[cou_Tier + 1]){ scaffold[cou_Tier + 1] = []; }
+				
+				for (let i = 0; i < (p_Input.length - cou_Tier - 1); i++) 
+				{
+					const node = this.get_Upper_Tier_Node((cou_Tier + 1), scaffold[cou_Tier][i], scaffold[cou_Tier][i + 1]);
+					//const node = new Node(p_Input[i], x, z, layer, layer === 0 ? 0x00ffff : 0xff00ff);
+					
+					scaffold[cou_Tier + 1][i] = node;
+				}
+			}
+			
+			//reinforce
+			for (let cou_Tier = 0; cou_Tier < p_Input.length; cou_Tier++)
+			{
+				for (let cou_I = 0; cou_I < (p_Input.length - cou_Tier); cou_I++)
+				{
+					scaffold[cou_Tier][cou_I].reinforcement_counter++;
+				}
+			}
+		}
+
+
+	  applyRandomCharges(min = -0.01, max = 0.01) {
+		for (const node of this.nodes) {
+		  node.applyCharge(Math.random() * (max - min) + min);
+		}
+	  }
+	  
+	  map_RC() {
+		for (const node of this.nodes) {
+		  node.map_RC();
+		}
+	  }
+
+	  updateEdges() {
+		for (const edge of this.edges) {
+		  edge.update();
+		}
+	  }
+	}
+
+  // === RUNTIME STATE ===
+ 
+	const hardwareNetwork = new NodeNetwork(0, 0x0f0f0f);
+	const symbolicNetwork = new NodeNetwork(1, 0x101010);
+	const semioticNetwork = new NodeNetwork(2, 0x00ff00);
+
+	//hardwareNetwork.connect(a, b);
+	
+  
+  let animationState = {
+    playing: false,
+    stepRequested: false
+  };
+
+  function play() {
+    animationState.playing = true;
+    animationState.stepRequested = false;
+  }
+
+  function pause() {
+    animationState.playing = false;
+  }
+
+  function step() {
+    animationState.stepRequested = true;
+    animationState.playing = false;
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+	if (animationState.playing || animationState.stepRequested) {
+	  symbolicNetwork.map_RC();
+	  
+	  semioticNetwork.map_RC();
+	  semioticNetwork.applyRandomCharges(-0.01, 0.01);
+	  
+	  semioticNetwork.updateEdges();
+	  hardwareNetwork.updateEdges();
+	  symbolicNetwork.updateEdges();
+	}
+
+    renderer.render(scene, camera);
+  }
+
+  function submitInput(source) 
+  {
+    const value = document.getElementById("input" + source).value.trim();
+    if (!value) return;
+
+    const layer = source === 'A' ? 0 : 1;
+	hardwareNetwork.Encode(value);
+	
+	symbolicNetwork.Encode(value);
+	symbolicNetwork.map_RC();
+	symbolicNetwork.updateEdges();
+	
+	semioticNetwork.Encode(value);
+	semioticNetwork.map_RC();
+	semioticNetwork.updateEdges();
+  }
+	
+  animate();
+</script>
+</body>
+</html>
