@@ -67,29 +67,126 @@
     <button onclick="pause()">Pause</button>
     <button onclick="step()">Step</button>
   </div>
+  
+  <div style="margin-top: 10px;">
+  <label>Threshold:</label>
+  <input type="number" id="thresholdInput" value="0.1" step="0.01" style="width: 60px;" />
+  
+  <label>Modifier:</label>
+  <input type="number" id="modifierInput" value="1.0" step="0.1" style="width: 60px;" />
+  
+  <label>Leakage:</label>
+  <input type="number" id="leakageInput" value="0.0" step="0.01" style="width: 60px;" />
+  
+  <button onclick="applyNodeParameters()">Apply</button>
+  <button onclick="clearCharges()">Clear Charges</button>
+  
+  
+  <label>Min Tier:</label>
+<input type="number" id="minTierInput" value="0" step="1" style="width: 60px;" />
+
+
+  <label>Max Tier:</label>
+  <input type="number" id="maxTierInput" value="99" step="1" style="width: 60px;" />
+  
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/examples/js/controls/OrbitControls.js"></script>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.156.1/build/three.min.js"></script>
 <script>
+  // === SCENE SETUP ===
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / (window.innerHeight * 0.7), 1, 1000);
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
   camera.position.set(10, 10, 20);
-  camera.lookAt(0, 0, 0);
+  const target = new THREE.Vector3(0, 0, 0);
 
   const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('engineCanvas'), antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight * 0.7);
 
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.05;
-  controls.rotateSpeed = 0.5;
-  controls.zoomSpeed = 0.5;
-
   const ambient = new THREE.AmbientLight(0xffffff, 0.7);
   const light = new THREE.DirectionalLight(0xffffff, 1);
   light.position.set(20, 50, 30);
-  scene.add(ambient, light);  
+  scene.add(ambient, light);
+  let isDragging = false;
+let lastMouse = { x: 0, y: 0 };
+let yaw = 0;
+let pitch = 0;
+let radius = 25;
+
+function updateCameraPosition() {
+  const x = target.x + radius * Math.cos(pitch) * Math.sin(yaw);
+  const y = target.y + radius * Math.sin(pitch);
+  const z = target.z + radius * Math.cos(pitch) * Math.cos(yaw);
+  camera.position.set(x, y, z);
+  camera.lookAt(target);
+}
+
+renderer.domElement.addEventListener('mousedown', (e) => {
+  isDragging = true;
+  lastMouse.x = e.clientX;
+  lastMouse.y = e.clientY;
+});
+
+renderer.domElement.addEventListener('mouseup', () => {
+  isDragging = false;
+});
+
+renderer.domElement.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  const dx = e.clientX - lastMouse.x;
+  const dy = e.clientY - lastMouse.y;
+  lastMouse.x = e.clientX;
+  lastMouse.y = e.clientY;
+
+  yaw -= dx * 0.005;
+  pitch -= dy * 0.005;
+
+  // Clamp pitch to avoid flipping over
+  const maxPitch = Math.PI / 2 - 0.01;
+  const minPitch = -Math.PI / 2 + 0.01;
+  pitch = Math.max(minPitch, Math.min(maxPitch, pitch));
+
+  updateCameraPosition();
+});
+
+renderer.domElement.addEventListener('wheel', (e) => {
+  radius += e.deltaY * 0.01;
+  radius = Math.max(5, Math.min(100, radius));
+  updateCameraPosition();
+});
+
+document.addEventListener('keydown', (e) => {
+  const moveStep = 0.5;
+  const zoomStep = 1;
+
+  switch (e.key) {
+    case 'ArrowUp':
+      target.z += moveStep;
+      break;
+    case 'ArrowDown':
+      target.z -= moveStep;
+      break;
+    case 'ArrowLeft':
+      target.x -= moveStep;
+      break;
+    case 'ArrowRight':
+      target.x += moveStep;
+      break;
+    case '+':
+    case '=': // handle shift+'=' key
+      radius -= zoomStep;
+      break;
+    case '-':
+      radius += zoomStep;
+      break;
+    default:
+      return; // ignore other keys
+  }
+
+  radius = Math.max(5, Math.min(100, radius));
+  updateCameraPosition();
+});
 
   // === NODE SYSTEM ===
   class Node {
@@ -102,7 +199,11 @@
       this.layer = layer;
       this.color = color;
 	  this.reinforcement_counter = 0;
-	  
+	  this.activation_potential_threshold = 0.1;
+	  this.unit_of_energy = 0.01;
+	  this.modifier_charge = 0.9;
+	  this.leakage_charge = 0.001;
+
 	  this.dendrites = [null, null];
 	  this.axons = [];
 
@@ -112,7 +213,23 @@
       this.updatePosition();
       scene.add(this.mesh);
     }
-
+	fire() {
+	  if (this.charge >= this.activation_potential_threshold) {
+		for (let axon of this.axons) {
+		  axon.receiveCharge(this.unit_of_energy * this.modifier_charge);
+		}
+		this.charge -= this.unit_of_energy;
+		this.updatePosition();
+	  }
+	}
+	tick() {
+	  if (this.charge > 0){ this.charge -= this.leakage_charge; }
+	  this.fire();
+	}
+	receiveCharge(amount) {
+	  this.charge += amount;
+	  this.updatePosition();
+	}
     updatePosition() {
       this.mesh.position.set(this.x, (this.y + this.charge), this.z);
     }
@@ -126,8 +243,8 @@
 
     map_RC() {
       this.y = this.reinforcement_counter * 0.1;
-	  console.log("RC:");
-	  console.log(this.reinforcement_counter);
+	  //console.log("RC:");
+	  //console.log(this.reinforcement_counter);
       this.updatePosition();
     }
   }
@@ -177,8 +294,8 @@
 	  addNode(id, p_Tier) {
 		if (!this.tier_depths[p_Tier]){ this.tier_depths[p_Tier] = 0; }
 		this.tier_depths[p_Tier] += 1;
-		console.log(this.tier_depths[p_Tier]);
-		const node = new Node(id, (p_Tier * 1), (this.tier_depths[p_Tier] * 1), this.layer, this.color);
+		//console.log(this.tier_depths[p_Tier]);
+		const node = new Node(id, (p_Tier * 1), (this.tier_depths[p_Tier] * 0.25), this.layer, this.color);
 		this.nodes.push(node);
 		return node;
 	  }
@@ -208,8 +325,8 @@
 			
 			this.tmp_Node = null;
 			
-			console.log("p_Node_L.axons.length = ");
-			console.log(p_Node_L.axons.length);
+			////console.log("p_Node_L.axons.length = ");
+			////console.log(p_Node_L.axons.length);
 			
 			if (p_Node_L.axons.length > 0)
 			{
@@ -219,8 +336,8 @@
 					for (let cou_A=0;cou_A<p_Node_L.axons.length;cou_A++)
 					{
 						if (p_Node_L.axons[cou_A].dendrites[1] == p_Node_R){ this.tmp_Node = p_Node_L.axons[cou_A]; }
-						console.log("\n dend[1]");
-						console.log(p_Node_L.axons[cou_A].dendrites[1]);
+						////console.log("\n dend[1]");
+						////console.log(p_Node_L.axons[cou_A].dendrites[1]);
 						
 					}
 				}
@@ -251,7 +368,10 @@
 		Encode(p_Input) 
 		{
 			const scaffold = [];
-			const stateNodes = [];
+			const stateNodes = [];			
+			let max_Tier = parseInt(document.getElementById("maxTierInput").value) || 99;
+			max_Tier = Math.min(max_Tier, p_Input.length);
+
 			
 			if (!scaffold[0]){ scaffold[0] = []; }
 			
@@ -263,7 +383,7 @@
 				scaffold[0][i] = node;
 			}
 			
-			for (let cou_Tier = 0; cou_Tier < (p_Input.length - 1); cou_Tier++)
+			for (let cou_Tier = 0; cou_Tier < (max_Tier - 1); cou_Tier++)
 			{
 				if (!scaffold[cou_Tier + 1]){ scaffold[cou_Tier + 1] = []; }
 				
@@ -277,11 +397,53 @@
 			}
 			
 			//reinforce
-			for (let cou_Tier = 0; cou_Tier < p_Input.length; cou_Tier++)
+			for (let cou_Tier = 0; cou_Tier < max_Tier; cou_Tier++)
 			{
 				for (let cou_I = 0; cou_I < (p_Input.length - cou_Tier); cou_I++)
 				{
 					scaffold[cou_Tier][cou_I].reinforcement_counter++;
+				}
+			}
+		}
+		
+		Eval(p_Input) 
+		{
+			const scaffold = [];
+			const stateNodes = [];
+			let max_Tier = parseInt(document.getElementById("maxTierInput").value) || 99;
+			max_Tier = Math.min(max_Tier, p_Input.length);
+			const min_Tier = parseInt(document.getElementById("minTierInput").value) || 0;
+			
+			if (!scaffold[0]){ scaffold[0] = []; }
+			
+			for (let i = 0; i < p_Input.length; i++) 
+			{
+				const node = this.get_State_Node(p_Input[i]);
+				//const node = new Node(p_Input[i], x, z, layer, layer === 0 ? 0x00ffff : 0xff00ff);
+				
+				scaffold[0][i] = node;
+			}
+			
+			for (let cou_Tier = 0; cou_Tier < (max_Tier - 1); cou_Tier++)
+			{
+				if (!scaffold[cou_Tier + 1]){ scaffold[cou_Tier + 1] = []; }
+				
+				for (let i = 0; i < (p_Input.length - cou_Tier - 1); i++) 
+				{
+					const node = this.get_Upper_Tier_Node((cou_Tier + 1), scaffold[cou_Tier][i], scaffold[cou_Tier][i + 1]);
+					//const node = new Node(p_Input[i], x, z, layer, layer === 0 ? 0x00ffff : 0xff00ff);
+					
+					scaffold[cou_Tier + 1][i] = node;
+				}
+			}
+			
+			//reinforce
+			for (let cou_Tier = min_Tier; cou_Tier < max_Tier; cou_Tier++)
+			{
+				for (let cou_I = 0; cou_I < (p_Input.length - cou_Tier); cou_I++)
+				{
+					scaffold[cou_Tier][cou_I].receiveCharge(1.0);
+					scaffold[cou_Tier][cou_I].tick();
 				}
 			}
 		}
@@ -336,18 +498,20 @@
 
   function animate() {
     requestAnimationFrame(animate);
-    if (animationState.playing || animationState.stepRequested) {
-      symbolicNetwork.map_RC();
-      semioticNetwork.map_RC();
-      semioticNetwork.applyRandomCharges(-0.01, 0.01);
-      semioticNetwork.updateEdges();
-      hardwareNetwork.updateEdges();
-      symbolicNetwork.updateEdges();
-    }
-    controls.update();
+	if (animationState.playing || animationState.stepRequested) {
+	  symbolicNetwork.map_RC();
+	  
+	  semioticNetwork.map_RC();
+	  
+		semioticNetwork.nodes.forEach(n => n.tick());
+	  
+	  semioticNetwork.updateEdges();
+	  hardwareNetwork.updateEdges();
+	  symbolicNetwork.updateEdges();
+	}
+
     renderer.render(scene, camera);
   }
-
 
   function submitInput(source) 
   {
@@ -355,17 +519,50 @@
     if (!value) return;
 
     const layer = source === 'A' ? 0 : 1;
-	hardwareNetwork.Encode(value);
 	
-	symbolicNetwork.Encode(value);
-	symbolicNetwork.map_RC();
-	symbolicNetwork.updateEdges();
+	if (layer == 0)
+	{
+		hardwareNetwork.Encode(value);
+		
+		symbolicNetwork.Encode(value);
+		symbolicNetwork.map_RC();
+		symbolicNetwork.updateEdges();
+		
+		semioticNetwork.Encode(value);
+		semioticNetwork.map_RC();
+		semioticNetwork.updateEdges();
+	}
 	
-	semioticNetwork.Encode(value);
-	semioticNetwork.map_RC();
-	semioticNetwork.updateEdges();
+	if (layer == 1)
+	{
+		semioticNetwork.Eval(value);
+		semioticNetwork.map_RC();
+		semioticNetwork.updateEdges();
+		animationState.stepRequested = true; // triggers next tick
+	}
   }
-	
+	function applyNodeParameters() {
+  const threshold = parseFloat(document.getElementById("thresholdInput").value);
+  const modifier = parseFloat(document.getElementById("modifierInput").value);
+  const leakage = parseFloat(document.getElementById("leakageInput").value);
+
+  for (const net of [hardwareNetwork, symbolicNetwork, semioticNetwork]) {
+    for (const node of net.nodes) {
+      node.activation_potential_threshold = threshold;
+      node.modifier_charge = modifier;
+      node.leakage_charge = leakage;
+    }
+  }
+}
+
+function clearCharges() {
+  for (const net of [hardwareNetwork, symbolicNetwork, semioticNetwork]) {
+    for (const node of net.nodes) {
+      node.charge = 0;
+      node.updatePosition();
+    }
+  }
+}
   animate();
 </script>
 </body>
