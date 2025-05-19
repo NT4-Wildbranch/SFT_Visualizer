@@ -67,16 +67,18 @@
     <button onclick="pause()">Pause</button>
     <button onclick="step()">Step</button>
   </div>
-  
+  <label><input type="checkbox" id="liveEvalToggle"> Live Eval</label>
+<input type="text" id="liveEvalInput" placeholder="Live input string" />
+
   <div style="margin-top: 10px;">
   <label>Threshold:</label>
   <input type="number" id="thresholdInput" value="0.1" step="0.01" style="width: 60px;" />
   
   <label>Modifier:</label>
-  <input type="number" id="modifierInput" value="1.0" step="0.1" style="width: 60px;" />
+  <input type="number" id="modifierInput" value="0.01" step="0.01" style="width: 60px;" />
   
   <label>Leakage:</label>
-  <input type="number" id="leakageInput" value="0.0" step="0.01" style="width: 60px;" />
+  <input type="number" id="leakageInput" value="0.0" step="0.005" style="width: 60px;" />
   
   <button onclick="applyNodeParameters()">Apply</button>
   <button onclick="clearCharges()">Clear Charges</button>
@@ -87,8 +89,15 @@
 
 
   <label>Max Tier:</label>
-  <input type="number" id="maxTierInput" value="99" step="1" style="width: 60px;" />
+  <input type="number" id="maxTierInput" value="20" step="1" style="width: 60px;" />
   
+  <label>Pad X:</label>
+<input type="number" id="padXInput" value="0.05" step="0.1" style="width: 60px;" />
+<label>Pad Y:</label>
+<input type="number" id="padYInput" value="0.05" step="0.1" style="width: 60px;" />
+<label>Pad Z:</label>
+<input type="number" id="padZInput" value="0.05" step="0.1" style="width: 60px;" />
+
 </div>
 
 </div>
@@ -111,7 +120,7 @@
   let isDragging = false;
 let lastMouse = { x: 0, y: 0 };
 let yaw = 0;
-let pitch = 0;
+let pitch = 0.3;
 let radius = 25;
 
 function updateCameraPosition() {
@@ -190,7 +199,7 @@ document.addEventListener('keydown', (e) => {
 
   // === NODE SYSTEM ===
   class Node {
-    constructor(id, x, z, layer, color) {
+    constructor(id, x, z, layer, color, p_Node_Size = 0.05, p_Ccreate_Edge = 0) {
       this.id = id;
       this.x = x;
       this.z = z; // separate layers by Z
@@ -200,14 +209,15 @@ document.addEventListener('keydown', (e) => {
       this.color = color;
 	  this.reinforcement_counter = 0;
 	  this.activation_potential_threshold = 0.1;
-	  this.unit_of_energy = 0.01;
+	  this.unit_of_energy = 0.5;
 	  this.modifier_charge = 0.9;
 	  this.leakage_charge = 0.001;
-
+	  this.create_Edge = p_Ccreate_Edge;
+	  this.node_Size = p_Node_Size;
 	  this.dendrites = [null, null];
 	  this.axons = [];
 
-      const geometry = new THREE.SphereGeometry(0.05, 16, 16);
+      const geometry = new THREE.SphereGeometry(p_Node_Size, 4, 4);
       const material = new THREE.MeshStandardMaterial({ color: this.color });
       this.mesh = new THREE.Mesh(geometry, material);
       this.updatePosition();
@@ -216,27 +226,48 @@ document.addEventListener('keydown', (e) => {
 	fire() {
 	  if (this.charge >= this.activation_potential_threshold) {
 		for (let axon of this.axons) {
-		  axon.receiveCharge(this.unit_of_energy * this.modifier_charge);
+		  //axon.receiveCharge(this.unit_of_energy * this.modifier_charge);
+		  axon.receiveCharge(this.charge * this.modifier_charge);
 		}
-		this.charge -= this.unit_of_energy;
+		//this.charge -= this.unit_of_energy;
+		if (this.axons.length > 0)
+		{
+			this.charge = this.charge - (this.charge * this.modifier_charge);
+			//this.charge = 0;
+		}
+		//this.charge = this.charge - (this.charge * this.modifier_charge);
+		//this.charge -= this.unit_of_energy;
+		//this.charge = 0;
+		if (this.charge < 0){ this.charge = 0; }
+		//if (this.charge > 2.5){ this.charge = 2.5; }
 		this.updatePosition();
 	  }
 	}
 	tick() {
 	  if (this.charge > 0){ this.charge -= this.leakage_charge; }
-	  this.fire();
+	  return this.fire();
 	}
 	receiveCharge(amount) {
 	  this.charge += amount;
+	  //if (this.charge >= this.activation_potential_threshold) { this.fire(); }
 	  this.updatePosition();
 	}
     updatePosition() {
-      this.mesh.position.set(this.x, (this.y + this.charge), this.z);
+		let tmp_Height = this.charge / 1;
+		//if (tmp_Height > 1){ tmp_Height = 1 + ((this.charge - 10000) / 100000); }
+		//tmp_Height = 1 * tmp_Height;
+      this.mesh.position.set(this.x, ((this.y + tmp_Height) * 0.001), this.z);
+	  
+	  const normCharge = Math.max(0, Math.min(this.charge / 1, 1));
+	  
+	  const greenValue = Math.floor(normCharge * 255);
+	  this.mesh.material.color.setRGB(0, (greenValue + 1) / 255, 0);
+	  
     }
 
     applyCharge(delta) {
       this.charge += delta;
-      this.charge = Math.max(-5, Math.min(this.charge, 5)); // clamp charge
+      //this.charge = Math.max(-5, Math.min(this.charge, 5)); // clamp charge
       //this.y = this.charge;
       this.updatePosition();
     }
@@ -255,7 +286,7 @@ document.addEventListener('keydown', (e) => {
       this.nodeB = nodeB;
       this.color = color;
 
-      const geometry = new THREE.CylinderGeometry(0.01, 0.01, 1, 8);
+      const geometry = new THREE.CylinderGeometry(0.01, 0.01, 1, 3);
       const material = new THREE.MeshStandardMaterial({ color: this.color });
 
       this.mesh = new THREE.Mesh(geometry, material);
@@ -267,7 +298,7 @@ document.addEventListener('keydown', (e) => {
     update() {
       const start = this.nodeA.mesh.position;
       const end = this.nodeB.mesh.position;
-
+	  this.color = this.nodeA.color;
       const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
       const direction = new THREE.Vector3().subVectors(end, start);
       const length = direction.length();
@@ -281,27 +312,60 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
+    //constructor(id, x, z, layer, color, p_Node_Size = 0.05, p_Ccreate_Edge = 0) {
 	class NodeNetwork {
-	  constructor(layer, color) {
+	  constructor(layer, color, p_Node_Size = 0.05) {
 		this.layer = layer;
 		this.color = color;
 		this.nodes = [];
 		this.edges = [];
 		this.tier_depths = []; //Number of nodes on each tier. Used to calculate node position.
+		this.highest_Charge_Current = []; //Number of nodes on each tier. Used to calculate node position.
+		this.highest_Charge_Previous = []; //Used to calculate normalized charge in the current set.
+		this.tier_depths = []; //Number of nodes on each tier. Used to calculate node position.
+		this.highest_Charge = 0; //Current highest charge. Other two aren't used atm.
 		this.states = new Map();
+		this.create_Edge = 0;
+		this.node_Size = p_Node_Size;
 	  }
 
 	  addNode(id, p_Tier) {
 		if (!this.tier_depths[p_Tier]){ this.tier_depths[p_Tier] = 0; }
 		this.tier_depths[p_Tier] += 1;
 		//console.log(this.tier_depths[p_Tier]);
-		const node = new Node(id, (p_Tier * 1), (this.tier_depths[p_Tier] * 0.25), this.layer, this.color);
+		const padX = parseFloat(document.getElementById("padXInput").value) || 1.0;
+		const padY = parseFloat(document.getElementById("padYInput").value) || 0.0;
+		const padZ = parseFloat(document.getElementById("padZInput").value) || 0.25;
+
+		const node = new Node(
+		  id,
+		  p_Tier * padX,
+		  this.tier_depths[p_Tier] * padZ,
+		  this.layer * padY,
+		  this.color,
+		  this.node_Size
+		);
 		this.nodes.push(node);
 		return node;
 	  }
+	  
+		normalize() {
+		  this.max_Charge = 0;
 
+		  // First pass: find the highest charge value
+		  for (const node of this.nodes) {
+			if (node.charge > this.max_Charge) {
+			  this.max_Charge = node.charge;
+			}
+		  }
+
+		  // Avoid divide-by-zero
+		  if (this.max_Charge <= 0) return;
+		}
+		
 	  connect(nodeA, nodeB, edgeColor = this.color) {
 		const edge = new Edge(nodeA, nodeB, edgeColor);
+
 		this.edges.push(edge);
 		return edge;
 	  }
@@ -356,8 +420,11 @@ document.addEventListener('keydown', (e) => {
 				p_Node_L.axons[p_Node_L.axons.length] = node;
 				p_Node_R.axons[p_Node_R.axons.length] = node;
 				
-				this.connect(p_Node_L, node);
-				this.connect(p_Node_R, node);
+				if (this.create_Edge == 1)
+				{
+					this.connect(p_Node_L, node);
+					this.connect(p_Node_R, node);
+				}
 				
 				return node;
 			}
@@ -437,14 +504,22 @@ document.addEventListener('keydown', (e) => {
 				}
 			}
 			
-			//reinforce
+			//charge
 			for (let cou_Tier = min_Tier; cou_Tier < max_Tier; cou_Tier++)
 			{
+				//Inject charges into the network.
 				for (let cou_I = 0; cou_I < (p_Input.length - cou_Tier); cou_I++)
 				{
 					scaffold[cou_Tier][cou_I].receiveCharge(1.0);
-					scaffold[cou_Tier][cou_I].tick();
 				}
+				
+				//Find the highest charge on this tier.
+				for (let cou_I = 0; cou_I < (p_Input.length - cou_Tier); cou_I++)
+				{
+					if (scaffold[cou_Tier][cou_I].charge > this.highest_Charge_Current[cou_I]){ this.highest_Charge_Current[cou_I] = scaffold[cou_Tier][cou_I].charge; }
+				}
+				
+				
 			}
 		}
 
@@ -469,10 +544,12 @@ document.addEventListener('keydown', (e) => {
 	}
 
   // === RUNTIME STATE ===
- 
-	const hardwareNetwork = new NodeNetwork(0, 0x0f0f0f);
-	const symbolicNetwork = new NodeNetwork(1, 0x101010);
-	const semioticNetwork = new NodeNetwork(2, 0x00ff00);
+	//constructor(id, x, z, layer, color, p_Node_Size = 0.05, p_Ccreate_Edge = 0) {
+	const hardwareNetwork = new NodeNetwork(0, 0x0f0f0f, 0.01);
+	const symbolicNetwork = new NodeNetwork(1, 0x101010, 0.01);
+	symbolicNetwork.create_Edge = 1;
+	const semioticNetwork = new NodeNetwork(2, 0x0f0f0f, 0.01);
+	semioticNetwork.create_Edge = 0;
 
 	//hardwareNetwork.connect(a, b);
 	
@@ -504,9 +581,14 @@ document.addEventListener('keydown', (e) => {
 	  semioticNetwork.map_RC();
 	  
 		semioticNetwork.nodes.forEach(n => n.tick());
+		
+	
+    if (liveEvalActive && liveInputString.length > 0) {
+      semioticNetwork.Eval(liveInputString);
+    }
 	  
 	  semioticNetwork.updateEdges();
-	  hardwareNetwork.updateEdges();
+	  //hardwareNetwork.updateEdges();
 	  symbolicNetwork.updateEdges();
 	}
 
@@ -519,10 +601,15 @@ document.addEventListener('keydown', (e) => {
     if (!value) return;
 
     const layer = source === 'A' ? 0 : 1;
-	
+
+	//console.log("Known states symbolicnetwork A:", symbolicNetwork.states.keys());
+	//console.log("Known states semioticnetwork B:", symbolicNetwork.states.keys());
+		
 	if (layer == 0)
 	{
-		hardwareNetwork.Encode(value);
+		//hardwareNetwork.Encode(value);
+		//hardwareNetwork.map_RC();
+		//hardwareNetwork.updateEdges();
 		
 		symbolicNetwork.Encode(value);
 		symbolicNetwork.map_RC();
@@ -531,6 +618,7 @@ document.addEventListener('keydown', (e) => {
 		semioticNetwork.Encode(value);
 		semioticNetwork.map_RC();
 		semioticNetwork.updateEdges();
+		
 	}
 	
 	if (layer == 1)
@@ -540,11 +628,17 @@ document.addEventListener('keydown', (e) => {
 		semioticNetwork.updateEdges();
 		animationState.stepRequested = true; // triggers next tick
 	}
+	
   }
-	function applyNodeParameters() {
+  function applyNodeParameters() {
   const threshold = parseFloat(document.getElementById("thresholdInput").value);
   const modifier = parseFloat(document.getElementById("modifierInput").value);
   const leakage = parseFloat(document.getElementById("leakageInput").value);
+
+  if (isNaN(threshold) || isNaN(modifier) || isNaN(leakage)) {
+    console.warn("Invalid node parameters.");
+    return; // Do nothing
+  }
 
   for (const net of [hardwareNetwork, symbolicNetwork, semioticNetwork]) {
     for (const node of net.nodes) {
@@ -563,6 +657,16 @@ function clearCharges() {
     }
   }
 }
+let liveEvalActive = false;
+let liveInputString = '';
+
+document.getElementById('liveEvalToggle').addEventListener('change', function (e) {
+  liveEvalActive = e.target.checked;
+});
+
+document.getElementById('liveEvalInput').addEventListener('input', function (e) {
+  liveInputString = e.target.value.trim();
+});
   animate();
 </script>
 </body>
